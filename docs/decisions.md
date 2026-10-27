@@ -280,3 +280,42 @@ and several selected epochs are single-epoch spikes (fold 2: 0.73 at epoch
 0.507 vs 0.565. The ~0.06 gap is the best available estimate of the
 selection bias in the early-stopped out-of-fold number, though the two runs
 also differ in training length. Treat ~0.51 as the more honest DS1 estimate.
+
+## Freeze and DS2 pre-declaration (2026-10-27, before any model sees DS2)
+
+**Config frozen at commit `1e35d94`** (`configs/default.yaml`, experiment
+`run2`). Run 2 was judged reasonable, so the one remaining targeted fix in
+the tuning budget is not used: F is limited by the data (one source patient),
+and the other candidate (smoothing the early-stopping signal) would add more
+selection on DS1 for a noise problem the 5-model average already damps.
+The DS2 evaluation script checks that `configs/default.yaml`, `ecg/data.py`,
+`ecg/model.py` and `ecg/train.py` are byte-identical to `1e35d94` and that
+the working tree is clean, records the commit it ran from, and refuses to
+overwrite existing DS2 results.
+
+Everything below is fixed now, before any DS2 prediction exists.
+
+| Role | Model | Use |
+|---|---|---|
+| **Primary result** | Early-stopped 5-model ensemble (`runs/run2/inter/fold0-4`), each model applying its own training-fold RR scaler; softmax outputs averaged; **raw argmax** | The headline DS2 number |
+| Secondary | Fixed-12-epoch 5-model ensemble (`runs/run2/inter_fixed12`), same rule | Comparison only; not used to select anything |
+| Diagnostic | Beat-level-CV 5-model ensemble (`runs/run2/intra_ds1`), same rule | Shows how far the leaky out-of-fold estimate (0.929) overstates performance on new patients; not used to select anything |
+| Also reported | Each of the 5 early-stopped fold models alone (mean ± sd over models) | Single model vs ensemble |
+
+- **Metrics:** per-class Se / PPV / F1 for N, S, V, F; macro-F1 over N, S,
+  V, F; accuracy; confusion matrix. Q (7 DS2 beats) excluded, as in training.
+- **Uncertainty:** 95% percentile bootstrap over DS2 *records* (22 patients,
+  2,000 resamples, seed 0); within a resample, beats are pooled and metrics
+  recomputed. Patients are the unit of generalization, so resampling beats
+  would understate the spread. F's interval will be wide: DS2's F beats come
+  from few records.
+- **Calibration:** variants (a)-(d) from the Phase 4 plan. T (for b) and T'
+  (for d) are fit on the pooled out-of-fold logits of the same run, before
+  DS2 is opened, and applied to every fold model's logits before averaging.
+  Reported on DS1 out-of-fold and on DS2: top-label ECE (15 equal-width
+  bins), NLL, Brier score, reliability diagrams. Se/PPV are reported for
+  both the raw and the prior-corrected decision rules; **raw argmax stays
+  primary**.
+- **Order:** DS2 results are committed before the literature-style
+  intra-patient run (random beat split over all 44 records), because that
+  run trains on DS2 beats.
