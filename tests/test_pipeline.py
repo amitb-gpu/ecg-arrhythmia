@@ -98,3 +98,35 @@ def test_sqrt_balanced_weights_bounded_and_mean_one():
     assert wb[3] / wb[0] == pytest.approx(1002, rel=0.01)
     assert ws[3] / ws[0] == pytest.approx(np.sqrt(1002), rel=0.01)
     assert ws[y].mean() == pytest.approx(1.0)
+
+
+def test_prior_correction_undoes_weighting():
+    # A model trained with weights w_c outputs log p(c|x) + log w_c + const;
+    # subtracting log w_c must recover the unweighted posterior exactly.
+    rng = np.random.default_rng(1)
+    true = rng.normal(0, 1, (100, 4))
+    w = np.array([0.7, 5.0, 2.9, 24.0])
+    cal = {"T": 2.0, "T_prior": 1.5}
+    z = E.adjust_logits(true + np.log(w), np.log(w), "prior", cal)
+    np.testing.assert_allclose(softmax(z, 1), softmax(true, 1))
+    np.testing.assert_allclose(E.adjust_logits(true, np.log(w), "temp", cal), true / 2.0)
+    np.testing.assert_allclose(E.adjust_logits(true + np.log(w), np.log(w), "prior_temp", cal), true / 1.5)
+
+
+def test_bootstrap_resamples_records_not_beats():
+    # Two records: one perfect, one all wrong. Resampling records gives a
+    # wide interval; resampling 10,000 beats would give a narrow one.
+    y = np.r_[np.zeros(5000, int), np.zeros(5000, int)]
+    pred = np.r_[np.zeros(5000, int), np.ones(5000, int)]
+    rec = np.r_[np.full(5000, 1), np.full(5000, 2)]
+    b = E.bootstrap_by_record(y, pred, rec, ["a", "b"], n_boot=500, seed=0)
+    assert b["ci"]["a_sensitivity"]["lo"] == pytest.approx(0.0)
+    assert b["ci"]["a_sensitivity"]["hi"] == pytest.approx(1.0)
+
+
+def test_metrics_from_cm_matches_class_metrics():
+    rng = np.random.default_rng(2)
+    y, p = rng.integers(0, 4, 500), rng.integers(0, 4, 500)
+    a = E.class_metrics(y, p, list("NSVF"))
+    b = E.metrics_from_cm(E.confusion(y, p, 4), list("NSVF"))
+    assert a == b
