@@ -1,20 +1,70 @@
 # ECG arrhythmia classification on MIT-BIH, tested on unseen patients
 
-A compact 1D CNN (TensorFlow/Keras, 187k parameters) that classifies single
-heartbeats into the AAMI classes N, S, V and F. The project's focus is the
-evaluation: how well does it work on **patients it has never seen**, and how
-far do common evaluation shortcuts overstate that?
+## What this is, in plain language
 
-**Headline.** On the 22 held-out patients of the standard inter-patient split
-(de Chazal DS2), evaluated once with a pre-declared model and decision rule:
-**macro-F1 0.52** (95% CI 0.44-0.61, bootstrap over patients). The same model
-and config score **0.93** under the random-beat split used by much of the
-literature. N and V transfer to new patients, S only partly, F not at all.
+An electrocardiogram (ECG) records the heart's electrical activity, one
+waveform per heartbeat. Most beats are normal. Some are not: extra beats that
+start in the upper chambers (**S**, supraventricular), extra beats that start
+in the lower chambers (**V**, ventricular), and blends of a normal and a
+ventricular beat (**F**, fusion). Software that labels every beat helps
+clinicians review long recordings, such as 24-hour Holter monitors, and is
+the kind of building block that sits under rhythm features in wearables.
+
+This repository trains a small neural network to label beats, using the
+standard public MIT-BIH Arrhythmia Database: 48 half-hour recordings from 47
+people. It asks one question above all: **how well does the model work on a
+person it has never seen?** That is the situation any real product is in.
+Much published work lets beats from the same patient appear in both training
+and test data, which makes scores look far better than they would be for a
+new user.
+
+**What it does**
+- **Gives an honest estimate for new patients.** The test set of 22 patients
+  was locked away, and the model and decision rule were declared in advance.
+  The test set was then used exactly once.
+- **Measures how much the shortcut inflates results.** The same model and
+  code were scored under both protocols, so the difference comes only from
+  how patients are split.
+- **Traces the failures to specific patients.** It explains why each failure
+  happens and measures how trustworthy the model's confidence scores are.
+- **Leaves an audit trail.** Every decision, including the failed first
+  attempt, is logged with its reasoning, and the commit history shows that
+  the config was frozen before the test set was opened.
+
+**Who it's useful for:** anyone building or reviewing health ML. It is a
+worked example of:
+- patient-level validation;
+- a single-use test set;
+- confidence intervals that resample patients rather than heartbeats;
+- calibration when training used class weights.
+
+**Scope:**
+- A research and portfolio project, **not a medical device**, and not for
+  clinical use.
+- Offline classification of beats that are already located (it uses the
+  database's annotated heartbeat positions).
+- One ECG lead, 4 beat classes (N, S, V, F).
+
+## Results at a glance
+
+| Evaluation | macro-F1 (N, S, V, F) |
+|---|---|
+| **22 unseen patients** (de Chazal DS2; pre-declared model, evaluated once; 95% CI by patient bootstrap) | **0.517** [0.436, 0.613] |
+| Random beat-level split over all 44 records (same patients in training and test; common in the literature) | 0.930 |
+
+Same model, same config, same code: only the split differs. On new patients:
+- **Normal beats:** F1 0.97.
+- **Ventricular beats:** detected well (sensitivity 0.96), with many false
+  alarms (PPV 0.71).
+- **Supraventricular beats:** mostly missed (sensitivity 0.19). Most of
+  these come from one unusual patient.
+- **Fusion beats:** not learnable from this training set (sensitivity 0.01).
 
 ![Same model, four evaluation protocols](results/summary/protocol_comparison.png)
 
-Everything is reproducible with one command (below). Every non-obvious choice,
-including the ones that failed, is in [`docs/decisions.md`](docs/decisions.md).
+Everything reproduces with one command (below); a fresh-clone run matched
+every committed number exactly. Every non-obvious choice, including the ones
+that failed, is in [`docs/decisions.md`](docs/decisions.md).
 
 ---
 
@@ -30,6 +80,7 @@ including the ones that failed, is in [`docs/decisions.md`](docs/decisions.md).
 9. [Leakage: why 0.93 and 0.52 are both "correct"](#leakage-why-093-and-052-are-both-correct)
 10. [Limitations and next steps](#limitations-and-next-steps)
 11. [Repository layout](#repository-layout)
+12. [Data citation, references and license](#data-citation-references-and-license)
 
 ---
 
@@ -196,12 +247,17 @@ why it isn't the headline.
   This fits the DS1 diagnosis that per-fold early stopping picks noise spikes
   in the validation curve. The primary result stays as declared. Switching now
   would be selecting on DS2.
-- **Comparison with the original split paper.** de Chazal et al. (2004),
-  using linear discriminants on hand-crafted features from both leads, report
-  S Se 75.9% / PPV 38.5% and V Se 77.7% / PPV 81.9% on DS2. This model trades
-  the other way: far fewer S detections but more precise, and higher V
-  sensitivity at lower V PPV. Their operating point differs from raw argmax,
-  so this is context, not a ranking.
+- **Comparison with the original split paper (figures from its abstract).**
+  de Chazal et al. (2004) classify beats with linear discriminants on
+  hand-crafted morphology and RR-interval features. On DS2 they report S
+  sensitivity 75.9% / PPV 38.5%, and V sensitivity 77.7% / PPV 81.9%.
+  - **S:** their linear model with RR features finds far more S beats in new
+    patients than this CNN does: 75.9% vs 18.6% sensitivity. It does so at a
+    different operating point, with lower PPV (38.5% vs 56.0%). So no single
+    number compares the two like for like. Even so, **this CNN is not
+    competitive on S.** Whether a different threshold could recover their
+    sensitivity at a usable PPV is untested.
+  - **V:** this model has higher sensitivity (95.5%) at lower PPV (70.6%).
 
 Full tables: [`results/run2/ds2/ds2_summary.md`](results/run2/ds2/ds2_summary.md),
 per patient: [`ds2_per_record.csv`](results/run2/ds2/ds2_per_record.csv).
@@ -338,12 +394,31 @@ docs/decisions.md          every decision, in order, with what was rejected and 
 results/                   all tables and figures (committed); runs/ and data/ are not
 ```
 
-## References
-- de Chazal P, O'Dwyer M, Reilly RB. *Automatic classification of heartbeats
-  using ECG morphology and heartbeat interval features.* IEEE Trans Biomed Eng
-  51(7), 2004. Source of the DS1/DS2 split and the DS2 baseline above.
-- Moody GB, Mark RG. *The impact of the MIT-BIH Arrhythmia Database.* IEEE Eng
-  Med Biol 20(3), 2001. Goldberger AL et al. *PhysioBank, PhysioToolkit, and
-  PhysioNet.* Circulation 101(23), 2000.
-- ANSI/AAMI EC57: testing and reporting performance results of cardiac rhythm
-  and ST-segment measurement algorithms (AAMI beat classes).
+## Data citation, references and license
+
+**Data.** This project uses the MIT-BIH Arrhythmia Database from PhysioNet,
+under the Open Data Commons Attribution License v1.0. The data is downloaded
+at run time and is not redistributed in this repository. As PhysioNet
+requests, please cite:
+
+- Moody GB, Mark RG. The impact of the MIT-BIH Arrhythmia Database. *IEEE
+  Engineering in Medicine and Biology* 20(3):45-50 (May-June 2001).
+  PMID: 11446209.
+- Moody G, Mark R. MIT-BIH Arrhythmia Database (version 1.0.0). *PhysioNet*
+  (2005). https://doi.org/10.13026/C2F305
+- Goldberger AL, Amaral LAN, Glass L, Hausdorff JM, Ivanov PCh, Mark RG,
+  Mietus JE, Moody GB, Peng C-K, Stanley HE. PhysioBank, PhysioToolkit, and
+  PhysioNet: Components of a new research resource for complex physiologic
+  signals. *Circulation* 101(23):e215-e220 (2000). RRID:SCR_007345.
+
+**Other references**
+- de Chazal P, O'Dwyer M, Reilly RB. Automatic classification of heartbeats
+  using ECG morphology and heartbeat interval features. *IEEE Transactions on
+  Biomedical Engineering* 51(7):1196-1206 (2004). Source of the DS1/DS2
+  split and of the DS2 comparison figures quoted above.
+- ANSI/AAMI EC57: Testing and reporting performance results of cardiac rhythm
+  and ST segment measurement algorithms (source of the AAMI beat classes).
+
+**License.** Code is released under the MIT License ([`LICENSE`](LICENSE)).
+The license does not cover the MIT-BIH data, which keeps its own license
+above.
