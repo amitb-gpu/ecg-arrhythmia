@@ -381,7 +381,10 @@ def evaluate_test(cfg: dict, dry_run: bool = False, overwrite: bool = False, n_b
     if not dry_run and (out / "ds2_metrics.json").exists() and not overwrite:
         raise SystemExit(f"{out}/ds2_metrics.json exists: DS2 has already been evaluated. "
                          "Pass --overwrite only to reproduce the frozen result.")
-    provenance = check_frozen(require_clean=not dry_run)
+    # The one real evaluation needs a clean tree; a reproduction (--overwrite, as in
+    # scripts/run_all.sh) only needs the frozen files unchanged.
+    provenance = check_frozen(require_clean=not (dry_run or overwrite))
+    provenance["reproduction"] = bool(overwrite)
     provenance["split"] = split
     provenance["utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     setup_runtime(cfg)
