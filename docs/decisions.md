@@ -319,3 +319,55 @@ Everything below is fixed now, before any DS2 prediction exists.
 - **Order:** DS2 results are committed before the literature-style
   intra-patient run (random beat split over all 44 records), because that
   run trains on DS2 beats.
+
+## Phase 4: DS2 evaluation (run once, 2026-10-27)
+
+Run from commit `f8bb1c9` (frozen files identical to `1e35d94`, clean tree);
+results committed in `ce2334d` before any further analysis. Before DS2, the
+same code was dry-run on DS1: reloaded fold models reproduced their stored
+out-of-fold logits to within 0.0025 (fp16 rounding).
+
+| | Primary: early-stopped ensemble | Secondary: fixed 12 epochs | Diagnostic: beat-level CV models |
+|---|---|---|---|
+| DS2 macro-F1 (95% CI, patient bootstrap) | **0.517** [0.436, 0.613] | 0.577 [0.512, 0.606] | 0.524 [0.441, 0.625] |
+| N Se / PPV | 0.965 / 0.971 | 0.952 / 0.970 | 0.989 / 0.963 |
+| S Se / PPV | 0.186 / 0.560 | 0.406 / 0.527 | 0.150 / 0.518 |
+| V Se / PPV | 0.955 / 0.706 | 0.932 / 0.841 | 0.925 / 0.827 |
+| F Se / PPV | 0.013 / 0.006 | 0.008 / 0.002 | 0.008 / 0.027 |
+
+Findings, and what they do and don't license:
+- **S is one patient.** Record 232 holds 75% of DS2's S beats; S Se there is
+  0.093 (S is the dominant rhythm, beats come in runs without a compensatory
+  pause, all N beats are RBBB). Without 232: S Se 0.470, PPV 0.443.
+- **F is one patient, as predicted in Phase 2.** Record 213 holds 93% of
+  DS2's F beats; 350 of its 362 are called N.
+- **Secondary beat primary by +0.060** (paired patient bootstrap 95% CI
+  [−0.037, +0.103]), mostly through record 232's S beats. On DS1 out-of-fold
+  the ordering was the reverse (0.565 vs 0.507). This supports the Phase 3
+  reading that per-fold early stopping picks noise spikes, and that the DS1
+  out-of-fold gap was selection bias. **The primary result is not changed:**
+  choosing fixed epochs now would be selecting on DS2. It goes into next
+  steps as a hypothesis for new data.
+- **Leaky validation overstated by 0.40.** The beat-level-CV models scored
+  0.929 out-of-fold and 0.524 on DS2.
+- **Calibration:** the DS1-fitted T and prior correction carry over to single
+  models on DS2 ((d) best on ECE/NLL/Brier). The pre-declared ensemble rule
+  (apply single-model T to each member) made the ensemble worse (ECE
+  0.050 -> 0.105): averaging already makes the raw ensemble under-confident.
+  An ensemble temperature needs patients no member trained on (nested CV).
+  Prior correction gives the best-calibrated ensemble (ECE 0.023, Brier
+  0.096) but lowers S Se to 0.06, so it is reported, not adopted as the
+  decision rule.
+
+### Literature-style comparison (after DS2 was committed)
+Random stratified beat split over all 44 records (70/10/20), same config,
+one model, early stopping on the 10%: test macro-F1 **0.930** (S F1 0.904, F
+F1 0.844), with all 44 test patients also in training. Run by
+`scripts/intra_patient_literature.py`.
+
+### Reproduction check
+`scripts/run_all.sh` in a fresh clone of `87a2b70` (data copied in, empty
+cache and runs): 23 min on the RTX 5090. Every model was retrained, and every
+committed number was reproduced exactly: DS1 out-of-fold metrics for all three
+runs, the literature-style test score, and the DS2 logits (max |difference|
+0.0) and metrics for all three model sets and four calibration variants.
