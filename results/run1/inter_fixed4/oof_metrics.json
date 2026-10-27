@@ -1,4 +1,5 @@
 {
+ "experiment": "run1",
  "run": "inter_fixed4",
  "scheme": "inter",
  "fixed_epochs": 4,

@@ -101,11 +101,11 @@ def report_cv(cfg: dict, run_name: str) -> dict:
     import pandas as pd
 
     from ecg import plotting as P
-    from ecg.config import ROOT
+    from ecg.config import results_dir, run_dir as get_run_dir
 
     classes = cfg["data"]["classes"]
-    run_dir = ROOT / cfg["paths"]["runs_dir"] / run_name
-    out = ROOT / cfg["paths"]["results_dir"] / run_name
+    run_dir = get_run_dir(cfg, run_name)
+    out = results_dir(cfg, run_name)
     out.mkdir(parents=True, exist_ok=True)
     o = np.load(run_dir / "oof.npz")
     summary = json.loads((run_dir / "summary.json").read_text())
@@ -138,7 +138,7 @@ def report_cv(cfg: dict, run_name: str) -> dict:
     per_fold = pd.DataFrame(rows).set_index("fold")
     per_fold.to_csv(out / "per_fold_metrics.csv", float_format="%.3f")
 
-    result = {"run": run_name, "scheme": summary["scheme"],
+    result = {"experiment": cfg["experiment"], "run": run_name, "scheme": summary["scheme"],
               "fixed_epochs": summary["fixed_epochs"],
               "pooled_oof": pooled,
               "per_fold_macroF1_NSV_mean": float(per_fold["macroF1_NSV"].mean()),
@@ -163,13 +163,16 @@ def _plot_curves(run_dir, summary, path, title, P) -> None:
         a, b = axes[0, i], axes[1, i]
         a.plot(ep, h["loss"], color=P.INK_2, label="train")
         a.plot(ep, h["val_loss"], color="#6250d6", label="validation")
-        b.plot(ep, h["val_macro_f1"], color="#6250d6")
+        key = "val_macro_f1_nsv" if "val_macro_f1_nsv" in h else "val_macro_f1"
+        b.plot(ep, h[key], color="#6250d6")
+        b.set_ylabel("")
         for ax in (a, b):
             ax.axvline(f["best_epoch"], color=P.INK_2, lw=0.8, ls="--")
         a.set_title(f"fold {i} (best epoch {f['best_epoch']})")
         b.set_xlabel("epoch")
     axes[0, 0].set_ylabel("class-weighted loss")
-    axes[1, 0].set_ylabel("validation macro-F1")
+    h0 = json.loads((run_dir / "fold0" / "history.json").read_text())
+    axes[1, 0].set_ylabel("val. macro-F1 (N,S,V)" if "val_macro_f1_nsv" in h0 else "val. macro-F1 (N,S,V,F)")
     axes[0, 0].legend(loc="upper right")
     fig.suptitle(f"{title}: training curves per fold (dashed = selected epoch)", y=1.01)
     fig.savefig(path)

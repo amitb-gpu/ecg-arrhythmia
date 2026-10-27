@@ -1,6 +1,7 @@
 # All hyperparameters for the ECG arrhythmia pipeline.
 # Rationale for each choice: docs/decisions.md
 
+experiment: run2         # outputs go to runs/<experiment>/ and results/<experiment>/
 seed: 0
 
 paths:
@@ -34,8 +35,9 @@ train:
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
   max_epochs: 60
-  patience: 8             # early stopping on class-weighted validation loss
-  class_weight: balanced  # w_c = n / (K * n_c), from the training fold only
+  patience: 8
+  early_stop_monitor: val_macro_f1_nsv  # macro-F1 over N,S,V on the held-out records
+  class_weight: sqrt_balanced  # w_c ∝ sqrt(n / (K n_c)), training fold only, mean sample weight 1
   mixed_precision: true
   deterministic: true
 

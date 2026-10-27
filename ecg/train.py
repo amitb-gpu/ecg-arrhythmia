@@ -32,7 +32,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from ecg import data as D
 from ecg import evaluate as E
-from ecg.config import ROOT, load_config
+from ecg.config import ROOT, load_config, run_dir as get_run_dir
 from ecg.model import build_model
 
 
@@ -50,11 +50,23 @@ def setup_runtime(cfg: dict) -> None:
         keras.mixed_precision.set_global_policy("mixed_float16")
 
 
-def class_weights(y: np.ndarray, n_classes: int) -> np.ndarray:
-    """'balanced': w_c = n / (K * n_c). Each class contributes equally to the
-    loss in expectation. Computed from the training fold only."""
-    counts = np.bincount(y, minlength=n_classes).astype(float)
-    return len(y) / (n_classes * np.maximum(counts, 1))
+def class_weights(y: np.ndarray, n_classes: int, mode: str = "balanced") -> np.ndarray:
+    """Per-class loss weights, computed from the training fold only.
+
+    balanced:      w_c = n / (K n_c); every class contributes equally to the
+                   loss in expectation. Explodes when a class is nearly absent
+                   (Run 1, fold 0: F weighed ~1,000x N).
+    sqrt_balanced: w_c proportional to sqrt(n / (K n_c)), rescaled so the mean
+                   per-sample weight is 1 (same loss scale as unweighted).
+    """
+    counts = np.maximum(np.bincount(y, minlength=n_classes).astype(float), 1)
+    w = len(y) / (n_classes * counts)
+    if mode == "balanced":
+        return w
+    if mode == "sqrt_balanced":
+        w = np.sqrt(w)
+        return w * len(y) / (w * counts).sum()
+    raise ValueError(mode)
 
 
 def make_ds(x, rr, y, w, batch: int, shuffle: bool, seed: int):
@@ -65,8 +77,8 @@ def make_ds(x, rr, y, w, batch: int, shuffle: bool, seed: int):
 
 
 class ValMacroF1(keras.callbacks.Callback):
-    """Logs validation macro-F1 per epoch for the training curves.
-    Monitoring only: early stopping uses validation loss."""
+    """Logs validation macro-F1 (all classes, and N/S/V only) each epoch.
+    Must run before the checkpoint/early-stopping callbacks that read it."""
 
     def __init__(self, x, rr, y, n_classes):
         super().__init__()
@@ -74,8 +86,10 @@ class ValMacroF1(keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         pred = self.model.predict(self.inputs, batch_size=4096, verbose=0).argmax(1)
-        f1 = E.class_metrics(self.y, pred, [str(i) for i in range(self.k)])["macro_f1"]
-        logs["val_macro_f1"] = f1
+        m = E.class_metrics(self.y, pred, [str(i) for i in range(self.k)])
+        logs["val_macro_f1"] = m["macro_f1"]
+        # N, S, V (codes 0-2) are present in every patient-level fold; F is not.
+        logs["val_macro_f1_nsv"] = float(np.mean([m["per_class"][str(i)]["f1"] for i in range(3)]))
 
 
 # ---------------------------------------------------------------- one fold
@@ -88,7 +102,7 @@ def train_fold(cfg: dict, d: dict, tr: np.ndarray, va: np.ndarray, fold: int,
 
     scaler = D.RRScaler().fit(d["rr"][tr])          # training records only
     rr_tr, rr_va = scaler.transform(d["rr"][tr]), scaler.transform(d["rr"][va])
-    cw = class_weights(d["y"][tr], n_cls)           # training records only
+    cw = class_weights(d["y"][tr], n_cls, tcfg["class_weight"])  # training records only
     w_tr, w_va = cw[d["y"][tr]].astype(np.float32), cw[d["y"][va]].astype(np.float32)
 
     ds_tr = make_ds(d["x"][tr], rr_tr, d["y"][tr], w_tr, tcfg["batch_size"], True, seed)
@@ -103,11 +117,13 @@ def train_fold(cfg: dict, d: dict, tr: np.ndarray, va: np.ndarray, fold: int,
 
     fold_dir.mkdir(parents=True, exist_ok=True)
     ckpt = fold_dir / "best.keras"
+    monitor = tcfg["early_stop_monitor"]
+    mode = "min" if monitor.endswith("loss") else "max"
     cbs = [ValMacroF1(d["x"][va], rr_va, d["y"][va], n_cls)]
     if fixed_epochs is None:
         epochs = tcfg["max_epochs"]
-        cbs += [keras.callbacks.ModelCheckpoint(ckpt, monitor="val_loss", save_best_only=True),
-                keras.callbacks.EarlyStopping(monitor="val_loss", patience=tcfg["patience"])]
+        cbs += [keras.callbacks.ModelCheckpoint(ckpt, monitor=monitor, mode=mode, save_best_only=True),
+                keras.callbacks.EarlyStopping(monitor=monitor, mode=mode, patience=tcfg["patience"])]
     else:
         epochs = fixed_epochs
 
@@ -117,7 +133,8 @@ def train_fold(cfg: dict, d: dict, tr: np.ndarray, va: np.ndarray, fold: int,
     h = {k: [float(v) for v in vs] for k, vs in hist.history.items()}
 
     if fixed_epochs is None:
-        best_epoch = int(np.argmin(h["val_loss"])) + 1
+        pick = np.argmin if mode == "min" else np.argmax  # first best, as the checkpoint keeps
+        best_epoch = int(pick(h[monitor])) + 1
         model = keras.models.load_model(ckpt)
     else:
         best_epoch = fixed_epochs
@@ -129,7 +146,7 @@ def train_fold(cfg: dict, d: dict, tr: np.ndarray, va: np.ndarray, fold: int,
     (fold_dir / "scaler.json").write_text(json.dumps(
         {"mean": scaler.mean_.tolist(), "std": scaler.std_.tolist(), "features": D.RR_FEATURES}))
     return {"fold": fold, "best_epoch": best_epoch, "epochs_run": len(h["loss"]),
-            "seconds": round(secs, 1), "class_weights": cw.round(3).tolist(),
+            "seconds": round(secs, 1), "class_weights": cw.tolist(),
             "n_train": int(len(tr)), "n_val": int(len(va)), "logits": logits,
             "policy": keras.mixed_precision.global_policy().name,
             "optimizer": type(model.optimizer).__name__,
@@ -155,7 +172,7 @@ def run_cv(cfg: dict, scheme: str, run_name: str, fixed_epochs: int | None) -> d
     setup_runtime(cfg)
     d = D.load_split(cfg, ROOT, "ds1", drop_q=True)
     ids = fold_ids(cfg, d, scheme)
-    run_dir = ROOT / cfg["paths"]["runs_dir"] / run_name
+    run_dir = get_run_dir(cfg, run_name)
     oof = np.full((len(d["y"]), len(cfg["data"]["classes"])), np.nan, np.float32)
 
     folds = []
@@ -191,7 +208,7 @@ def main() -> None:
 
     fixed = None
     if a.fixed_epochs_from:
-        src = json.loads((ROOT / cfg["paths"]["runs_dir"] / a.fixed_epochs_from / "summary.json").read_text())
+        src = json.loads((get_run_dir(cfg, a.fixed_epochs_from) / "summary.json").read_text())
         fixed = src["median_best_epoch"]
     name = a.run_name or (a.scheme + (f"_fixed{fixed}" if fixed else ""))
     run_cv(cfg, a.scheme, name, fixed)

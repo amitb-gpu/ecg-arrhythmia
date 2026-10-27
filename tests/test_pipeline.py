@@ -88,3 +88,13 @@ def test_ece_zero_when_calibrated_and_temperature_recovered():
     T = E.fit_temperature(overconfident, y)
     assert T == pytest.approx(3.0, rel=0.1)
     assert E.ece(softmax(overconfident / T, 1), y) < E.ece(softmax(overconfident, 1), y)
+
+
+def test_sqrt_balanced_weights_bounded_and_mean_one():
+    from ecg.train import class_weights
+    y = np.r_[np.zeros(37064, int), np.ones(830, int), np.full(2573, 2), np.full(37, 3)]  # Run 1 fold-0 training counts
+    wb = class_weights(y, 4, "balanced")
+    ws = class_weights(y, 4, "sqrt_balanced")
+    assert wb[3] / wb[0] == pytest.approx(1002, rel=0.01)
+    assert ws[3] / ws[0] == pytest.approx(np.sqrt(1002), rel=0.01)
+    assert ws[y].mean() == pytest.approx(1.0)

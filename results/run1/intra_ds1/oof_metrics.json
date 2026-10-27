@@ -1,4 +1,5 @@
 {
+ "experiment": "run1",
  "run": "intra_ds1",
  "scheme": "intra_ds1",
  "fixed_epochs": null,

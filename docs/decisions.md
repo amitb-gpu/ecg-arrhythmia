@@ -204,3 +204,79 @@ folds, validation loss bottoms out within 1-9 epochs.
 Any fix is chosen after seeing Run 1's out-of-fold results, so Run 2's
 out-of-fold scores carry that selection on top of the early-stopping bias.
 DS2 remains the unbiased check.
+
+### Tuning budget (agreed 2026-10-27, before Run 2)
+- Allowed: **Run 2**, plus **at most one more targeted fix** chosen from
+  out-of-fold DS1 results. If Run 2 is reasonable, the config is frozen after
+  Run 2. Either way the config is frozen **before** DS2 is evaluated, and
+  the frozen commit hash is recorded here.
+- Every run stays in the repo (`results/run1/`, `results/run2/`, ...) with
+  its own config (`configs/run1.yaml`, ...), including the ones that failed.
+
+### Run 2 changes (fixed before running)
+| Change | Why |
+|---|---|
+| `class_weight: sqrt_balanced`: w_c ∝ sqrt(n / (K n_c)) from the training fold, rescaled so the mean per-sample weight is 1 | Bounds the fold-0 F weight at ~32x N instead of ~1,000x, while still boosting rare classes (other folds: F ~9x N, S ~7x N). Mean weight 1 keeps the loss on the same scale as unweighted CE, so the learning rate means the same thing |
+| `early_stop_monitor: val_macro_f1_nsv`: validation macro-F1 over N, S, V; patience 8; checkpoint at the best epoch | Defined in every patient-level fold (>= 104 S, >= 554 V), matches the reported metric, and isn't dominated by one patient's F beats. F is left out because it is absent or near-absent in 4 of 5 folds |
+| Same changes for the fixed-epoch (median best epoch) and beat-level comparison runs | Keeps the three-way comparison like for like |
+
+### Phase 4 calibration plan (recorded before any calibration numbers)
+Class-weighted training fits p_w(c | x) ∝ w_c · p(c | x): probabilities are
+shifted toward rare classes. A single temperature rescales confidence but
+cannot undo a class-prior shift. Phase 4 reports calibration (reliability
+diagram + ECE, out-of-fold on DS1 and once on DS2) for:
+- (a) raw logits;
+- (b) temperature scaling, T fit on pooled out-of-fold logits;
+- (c) logit prior correction: logits − log w_c, using each fold model's own
+  training-fold weights;
+- (d) (c) followed by a temperature fit on the corrected out-of-fold logits.
+
+For the ensemble, each fold model's logits are corrected and/or divided by T
+first, then the softmax outputs are averaged. Prior correction changes the
+argmax as well as the probabilities (it pulls decisions back toward N), so
+Se/PPV are reported for both the raw and the prior-corrected decision rules.
+The **primary decision rule stays raw argmax**, pre-declared here, so DS2 is
+not used to choose between them.
+
+### Run 2 results (DS1 out-of-fold; DS2 untouched)
+Full table: `results/run2/oof_summary.md`.
+
+| | Patient-level, early stop | Patient-level, fixed 12 epochs | Beat-level (leaky) |
+|---|---|---|---|
+| macro-F1 (N,S,V,F) | 0.565 | 0.507 | 0.929 |
+| N Se / PPV | 0.917 / 0.984 | 0.921 / 0.965 | 0.996 / 0.996 |
+| S Se / PPV | 0.406 / 0.544 | 0.396 / 0.344 | 0.909 / 0.917 |
+| V Se / PPV | 0.948 / 0.749 | 0.749 / 0.667 | 0.960 / 0.981 |
+| F Se / PPV | 0.039 / 0.006 | 0.027 / 0.006 | 0.896 / 0.786 |
+| per-fold macro-F1 (N,S,V) | 0.731 ± 0.104 | 0.661 ± 0.129 | 0.960 ± 0.010 |
+
+**What changed vs Run 1:** N sensitivity 0.66 -> 0.92; S PPV 0.08 -> 0.54;
+V PPV 0.57 -> 0.75. The fold-0 model no longer calls everything F (N Se
+0.195 -> 0.984).
+
+**Leakage gap widened:** 0.929 vs 0.565 macro-F1 on identical data and
+model. With beat-level folds, every class looks solved (F Se 0.90).
+
+**F is not learnable across patients from DS1.** The fold-0 model, trained
+without record 208 (37 F beats left), detects 0.5% of 208's F beats. F
+predictions are 0.6% precise: 2,651 N beats called F, 2,400 of them from
+three patients:
+- 207: 1,223 of 1,542 (bundle branch block beats; AAMI counts L/R as N, but
+  they are wide like ventricular or fusion beats);
+- 201: 642 (atrial fibrillation episodes and aberrant conduction);
+- 203: 535 (noisy, multiform PVCs).
+
+F has become the model's "unfamiliar wide beat" bin. DS2 F results will
+mostly reflect whether patient 208's F beats generalize to record 213, which
+holds most of DS2's F.
+
+**S misses are also patient-specific:** 0 of 96 S beats detected in 118,
+0 of 106 in 207, 0 of 31 in 124, versus 219 of 383 in 209 and 69 of 94 in
+220.
+
+**Early-stopping optimism, measured:** validation macro-F1 curves are noisy
+and several selected epochs are single-epoch spikes (fold 2: 0.73 at epoch
+7, neighbours 0.36-0.58). The fixed-epoch run (no per-fold selection) scores
+0.507 vs 0.565. The ~0.06 gap is the best available estimate of the
+selection bias in the early-stopped out-of-fold number, though the two runs
+also differ in training length. Treat ~0.51 as the more honest DS1 estimate.
