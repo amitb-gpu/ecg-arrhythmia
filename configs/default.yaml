@@ -1,0 +1,43 @@
+# All hyperparameters for the ECG arrhythmia pipeline.
+# Rationale for each choice: docs/decisions.md
+
+seed: 0
+
+paths:
+  data_dir: data          # raw MIT-BIH (gitignored)
+  cache_dir: cache        # built beat arrays (gitignored)
+  runs_dir: runs          # checkpoints, logits, histories (gitignored)
+  results_dir: results    # figures and metric tables (committed)
+
+data:
+  lead: MLII
+  bandpass_hz: [0.5, 40.0]
+  filter_order: 2
+  window_s: [0.25, 0.45]  # before / after the R-peak
+  local_rr_beats: 10
+  classes: [N, S, V, F]   # Q excluded from training and metrics
+
+cv:
+  n_folds: 5              # StratifiedGroupKFold over DS1 records
+
+model:
+  stem_filters: 32
+  stem_kernel: 7
+  block_filters: [32, 64, 128]  # one residual block per stage; stride 2 after stage 1
+  block_kernel: 5
+  rr_units: 16
+  head_units: 64
+  dropout: 0.3
+
+train:
+  batch_size: 256
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 60
+  patience: 8             # early stopping on class-weighted validation loss
+  class_weight: balanced  # w_c = n / (K * n_c), from the training fold only
+  mixed_precision: true
+  deterministic: true
+
+calibration:
+  n_bins: 15

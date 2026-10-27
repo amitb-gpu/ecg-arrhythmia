@@ -32,7 +32,7 @@ def per_record_table(mitdb: Path) -> tuple[pd.DataFrame, pd.DataFrame, Counter]:
         m = D.beat_keep_mask(r)
         lab = m["labels"]
         row = {"record": rec}
-        for c in D.CLASSES:
+        for c in D.AAMI_CLASSES:
             row[c] = int(((lab == c) & m["keep"]).sum())
         row["kept"] = int(m["keep"].sum())
         row["all_aami"] = int(m["in_aami"].sum())
@@ -54,7 +54,7 @@ def fold_counts(bdf: pd.DataFrame, folds) -> pd.DataFrame:
         v = bdf.iloc[va]
         recs = sorted(v.record.unique().tolist())
         row = {"fold": i, "records": " ".join(map(str, recs))}
-        row.update({c: int((v.label == c).sum()) for c in D.CLASSES})
+        row.update({c: int((v.label == c).sum()) for c in D.AAMI_CLASSES})
         rows.append(row)
     return pd.DataFrame(rows).set_index("fold")
 
@@ -63,12 +63,12 @@ def sanity_plot(mitdb: Path, bdf_records: list[int], path: Path) -> None:
     """A few beats per class from DS1, filtered + normalized, R-peak marked."""
     import matplotlib.pyplot as plt
     rng = np.random.default_rng(SEED)
-    pool = {c: [] for c in D.CLASSES}
+    pool = {c: [] for c in D.AAMI_CLASSES}
     for rec in bdf_records:
         r = D.load_record(rec, mitdb)
         m = D.beat_keep_mask(r)
         xf = D.bandpass(r.signal)
-        for c in D.CLASSES:
+        for c in D.AAMI_CLASSES:
             idx = np.where(m["keep"] & (m["labels"] == c))[0]
             if len(idx):
                 pick = rng.choice(idx, size=min(4, len(idx)), replace=False)
@@ -77,7 +77,7 @@ def sanity_plot(mitdb: Path, bdf_records: list[int], path: Path) -> None:
     P.setup()
     t_ms = (np.arange(D.WIN) - D.PRE) / D.FS * 1000
     fig, axes = plt.subplots(1, 5, figsize=(15, 3.2), sharey=True)
-    for ax, c in zip(axes, D.CLASSES):
+    for ax, c in zip(axes, D.AAMI_CLASSES):
         items = pool[c]
         sel = rng.choice(len(items), size=min(8, len(items)), replace=False)
         recs = sorted({items[i][0] for i in sel})
@@ -96,7 +96,7 @@ def sanity_plot(mitdb: Path, bdf_records: list[int], path: Path) -> None:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     mitdb = D.download(ROOT / "data")
-    D.check_split()
+    D.check_split(mitdb)
     print("Split check: DS1, DS2, paced are disjoint and cover all 48 records.")
 
     # MLII present in every DS1 record?
@@ -115,14 +115,14 @@ def main() -> None:
     print(f"\nQRS annotations outside the AAMI mapping (kept for RR only): {dict(other)}")
 
     # Cross-check against published totals (before drops).
-    pre = {c: int(tot[c]) for c in D.CLASSES}
+    pre = {c: int(tot[c]) for c in D.AAMI_CLASSES}
     dropped_by_class = Counter()
     for rec in D.DS1:
         r = D.load_annotations(rec, mitdb)
         m = D.beat_keep_mask(r)
         dropped_by_class.update(m["labels"][m["in_aami"] & ~m["keep"]].tolist())
     print("\nClass | kept | dropped | kept+dropped | published (Huang 2014)")
-    for c in D.CLASSES:
+    for c in D.AAMI_CLASSES:
         print(f"  {c}   | {pre[c]:5d} | {dropped_by_class[c]:3d} | "
               f"{pre[c] + dropped_by_class[c]:5d} | {PUBLISHED_DS1[c]}")
 

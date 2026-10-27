@@ -1,0 +1,12 @@
+{
+ "ds1": {
+  "n_drop_edge": 19,
+  "n_drop_no_rr": 25,
+  "n_beats": 50977
+ },
+ "ds2": {
+  "n_drop_edge": 20,
+  "n_drop_no_rr": 24,
+  "n_beats": 49668
+ }
+}
